@@ -16,37 +16,42 @@ parser.add_argument('--niters', type=int, default=2000)
 parser.add_argument('--test_freq', type=int, default=20)
 parser.add_argument('--viz', action='store_true')
 parser.add_argument('--gpu', type=int, default=0)
-parser.add_argument('--adjoint', action='store_true')
+parser.add_argument('--adjoint', action='store_false')
 args = parser.parse_args()
 
 if args.adjoint:
-    from torchdiffeq import odeint_adjoint as odeint
+    # from torchdiffeq import odeint_adjoint as odeint
+    from torchdiffeq import odeint
 else:
     from torchdiffeq import odeint
 
 device = torch.device('cuda:' + str(args.gpu) if torch.cuda.is_available() else 'cpu')
 
 true_y0 = torch.tensor([[2., 0.]])
-t = torch.linspace(0., 25., args.data_size)
 true_A = torch.tensor([[-0.1, 2.0], [-2.0, -0.1]])
+true_B = torch.tensor([[0.], [1]])
+
+t_values = torch.linspace(0., 25., args.data_size)
+u_values = torch.randn(len(t_values), 1)
 
 
 class Lambda(nn.Module):
 
-    def forward(self, t, y):
-        return torch.mm(y**3, true_A)
+    def forward(self, t, y, u):
+        return torch.mm(y, true_A) + true_B @ u
 
 
 with torch.no_grad():
-    true_y = odeint(Lambda(), true_y0, t, method='dopri5')
+    true_y = odeint(Lambda(), true_y0, t_values, u=u_values, method='euler')
 
 
 def get_batch():
     s = torch.from_numpy(np.random.choice(np.arange(args.data_size - args.batch_time, dtype=np.int64), args.batch_size, replace=False))
     batch_y0 = true_y[s]  # (M, D)
-    batch_t = t[:args.batch_time]  # (T)
+    batch_t = t_values[:args.batch_time]  # (T)
+    batch_u = u_values[:args.batch_time]  # (T)
     batch_y = torch.stack([true_y[s + i] for i in range(args.batch_time)], dim=0)  # (T, M, D)
-    return batch_y0, batch_t, batch_y
+    return batch_y0, batch_t, batch_y, batch_u
 
 
 def makedirs(dirname):
@@ -72,9 +77,9 @@ def visualize(true_y, pred_y, odefunc, itr):
         ax_traj.set_title('Trajectories')
         ax_traj.set_xlabel('t')
         ax_traj.set_ylabel('x,y')
-        ax_traj.plot(t.numpy(), true_y.numpy()[:, 0, 0], t.numpy(), true_y.numpy()[:, 0, 1], 'g-')
-        ax_traj.plot(t.numpy(), pred_y.numpy()[:, 0, 0], '--', t.numpy(), pred_y.numpy()[:, 0, 1], 'b--')
-        ax_traj.set_xlim(t.min(), t.max())
+        ax_traj.plot(t_values.numpy(), true_y.numpy()[:, 0, 0], t_values.numpy(), true_y.numpy()[:, 0, 1], 'g-')
+        ax_traj.plot(t_values.numpy(), pred_y.numpy()[:, 0, 0], '--', t_values.numpy(), pred_y.numpy()[:, 0, 1], 'b--')
+        ax_traj.set_xlim(t_values.min(), t_values.max())
         ax_traj.set_ylim(-2, 2)
         ax_traj.legend()
 
@@ -115,8 +120,8 @@ class ODEFunc(nn.Module):
 
         self.net = nn.Sequential(
             nn.Linear(2, 50),
-            nn.Tanh(),
-            nn.Linear(50, 2),
+            # nn.Tanh(),
+            # nn.Linear(50, 2),
         )
 
         for m in self.net.modules():
@@ -124,8 +129,8 @@ class ODEFunc(nn.Module):
                 nn.init.normal_(m.weight, mean=0, std=0.1)
                 nn.init.constant_(m.bias, val=0)
 
-    def forward(self, t, y):
-        return self.net(y**3)
+    def forward(self, t, y, u):
+        return self.net(y)
 
 
 class RunningAverageMeter(object):
@@ -160,8 +165,8 @@ if __name__ == '__main__':
 
     for itr in range(1, args.niters + 1):
         optimizer.zero_grad()
-        batch_y0, batch_t, batch_y = get_batch()
-        pred_y = odeint(func, batch_y0, batch_t)
+        batch_y0, batch_t, batch_y, batch_u = get_batch()
+        pred_y = odeint(func, batch_y0, batch_t, batch_u)
         loss = torch.mean(torch.abs(pred_y - batch_y))
         loss.backward()
         optimizer.step()
@@ -171,7 +176,7 @@ if __name__ == '__main__':
 
         if itr % args.test_freq == 0:
             with torch.no_grad():
-                pred_y = odeint(func, true_y0, t)
+                pred_y = odeint(func, true_y0, t_values)
                 loss = torch.mean(torch.abs(pred_y - true_y))
                 print('Iter {:04d} | Total Loss {:.6f}'.format(itr, loss.item()))
                 visualize(true_y, pred_y, func, ii)
