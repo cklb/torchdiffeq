@@ -31,14 +31,19 @@ true_y0 = torch.tensor([[2., 0.]])
 true_A = torch.tensor([[-0.1, 2.0], [-2.0, -0.1]])
 true_B = torch.tensor([[0.], [1]])
 
+state_dim = 2
+input_dim = 1
+
 t_values = torch.linspace(0., 25., args.data_size)
 u_values = torch.randn(len(t_values), 1)
 
 
 class Lambda(nn.Module):
 
-    def forward(self, t, y, u):
-        return torch.mm(y, true_A) + true_B @ u
+    def forward(self, t, y, *args):
+        x = y
+        u = args[0]
+        return x @ true_A.t() + u @ true_B.t()
 
 
 with torch.no_grad():
@@ -98,7 +103,9 @@ def visualize(true_y, pred_y, odefunc, itr):
         ax_vecfield.set_ylabel('y')
 
         y, x = np.mgrid[-2:2:21j, -2:2:21j]
-        dydt = odefunc(0, torch.Tensor(np.stack([x, y], -1).reshape(21 * 21, 2))).cpu().detach().numpy()
+        vec_init_states = torch.Tensor(np.stack([x, y], -1).reshape(21 * 21, 2))
+        vec_inputs = torch.Tensor(torch.ones(21**2, 1) * u_values[0])
+        dydt = odefunc(0, vec_init_states, vec_inputs).cpu().detach().numpy()
         mag = np.sqrt(dydt[:, 0]**2 + dydt[:, 1]**2).reshape(-1, 1)
         dydt = (dydt / mag)
         dydt = dydt.reshape(21, 21, 2)
@@ -118,19 +125,20 @@ class ODEFunc(nn.Module):
     def __init__(self):
         super(ODEFunc, self).__init__()
 
+        net_dim = state_dim + input_dim
         self.net = nn.Sequential(
-            nn.Linear(2, 50),
+            nn.Linear(net_dim, net_dim, bias=False),
             # nn.Tanh(),
             # nn.Linear(50, 2),
         )
+        self.a_net = nn.Linear(state_dim, state_dim, bias=False)
+        self.b_net = nn.Linear(input_dim, state_dim, bias=False)
 
-        for m in self.net.modules():
-            if isinstance(m, nn.Linear):
-                nn.init.normal_(m.weight, mean=0, std=0.1)
-                nn.init.constant_(m.bias, val=0)
+        nn.init.normal_(self.a_net.weight, mean=0, std=0.1)
+        nn.init.normal_(self.b_net.weight, mean=0, std=0.1)
 
     def forward(self, t, y, u):
-        return self.net(y)
+        return self.a_net(y) + self.b_net(u)
 
 
 class RunningAverageMeter(object):
@@ -176,10 +184,12 @@ if __name__ == '__main__':
 
         if itr % args.test_freq == 0:
             with torch.no_grad():
-                pred_y = odeint(func, true_y0, t_values)
+                pred_y = odeint(func, true_y0, t_values, u_values)
                 loss = torch.mean(torch.abs(pred_y - true_y))
                 print('Iter {:04d} | Total Loss {:.6f}'.format(itr, loss.item()))
                 visualize(true_y, pred_y, func, ii)
                 ii += 1
 
         end = time.time()
+
+    print(func.parameters())

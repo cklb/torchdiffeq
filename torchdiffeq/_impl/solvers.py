@@ -74,7 +74,7 @@ class FixedGridODESolver(object):
         pass
 
     @abc.abstractmethod
-    def step_func(self, func, t, dt, y, u):
+    def step_func(self, func, t, dt, y, *args):
         pass
 
     def integrate(self, t):
@@ -89,14 +89,19 @@ class FixedGridODESolver(object):
         j = 1
         y0 = self.y0
         for idx, (t0, t1) in enumerate(zip(time_grid[:-1], time_grid[1:])):
-            u = self.u[idx]
-            dy = self.step_func(self.func, t0, t1 - t0, y0, u)
+            extra_args = []
+            if self.u is not None:
+                u = tuple(_u[idx] for _u in self.u)
+                extra_args.append(u)
+
+            dy = self.step_func(self.func, t0, t1 - t0, y0, *extra_args)
             y1 = tuple(y0_ + dy_ for y0_, dy_ in zip(y0, dy))
-            y0 = y1
 
             while j < len(t) and t1 >= t[j]:
                 solution.append(self._linear_interp(t0, t1, y0, y1, t[j]))
                 j += 1
+
+            y0 = y1
 
         return tuple(map(torch.stack, tuple(zip(*solution))))
 
