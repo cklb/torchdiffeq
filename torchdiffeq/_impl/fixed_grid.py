@@ -5,7 +5,7 @@ from . import rk_common
 class Euler(FixedGridODESolver):
 
     def step_func(self, func, t, dt, y, *args):
-        return tuple(dt * f_ for f_ in func(t, y, *args))
+        return tuple(dt_ * f_ for dt_, f_ in zip(dt, func(t, y, *args)))
 
     @property
     def order(self):
