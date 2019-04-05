@@ -80,6 +80,11 @@ class FixedGridODESolver(object):
     def integrate(self, t):
         _assert_increasing(t)
         t = t.type_as(self.y0[0])
+        if t.dim() > 1:
+            t_mod = t.t()
+        else:
+            t_mod = t
+
         time_grid = self.grid_constructor(self.func, self.y0, t)
         if t.dim() > 1:
             assert all(time_grid[0] == t[0]) and all(time_grid[-1] == t[-1])
@@ -91,17 +96,33 @@ class FixedGridODESolver(object):
 
         j = 1
         y0 = self.y0
-        for idx, (t0, t1) in enumerate(zip(time_grid[:-1], time_grid[1:])):
+        if time_grid.dim() == 1:
+            times = zip(time_grid[:-1], time_grid[1:])
+        else:
+            times = zip(time_grid.t()[:-1], time_grid.t()[1:])
+        for idx, (t0, t1) in enumerate(times):
             extra_args = []
             if self.u is not None:
-                u = tuple(_u[idx] for _u in self.u)
+                if self.u[0].dim() == 3:
+                    u = tuple(_u[:, idx] for _u in self.u)
+                else:
+                    u = tuple(_u[idx] for _u in self.u)
                 extra_args.append(u)
 
             dy = self.step_func(self.func, t0, t1 - t0, y0, *extra_args)
             y1 = tuple(y0_ + dy_ for y0_, dy_ in zip(y0, dy))
 
-            while j < len(t) and t1 >= t[j]:
-                solution.append(self._linear_interp(t0, t1, y0, y1, t[j]))
+            def _in_solution_region(idx, t_values, curr_time):
+                if idx < len(t_values):
+                    return False
+                if curr_time.dim() == 0:
+                    return curr_time >= t_values[idx]
+                else:
+                    return all(curr_time >= t_values[idx])
+
+            # while j < len(t_mod) and t1 >= t_mod[j]:
+            while _in_solution_region(j, t_mod, t1):
+                solution.append(self._linear_interp(t0, t1, y0, y1, t_mod[j]))
                 j += 1
 
             y0 = y1
@@ -109,10 +130,20 @@ class FixedGridODESolver(object):
         return tuple(map(torch.stack, tuple(zip(*solution))))
 
     def _linear_interp(self, t0, t1, y0, y1, t):
-        if t == t0:
-            return y0
-        if t == t1:
-            return y1
-        t0, t1, t = t0.to(y0[0]), t1.to(y0[0]), t.to(y0[0])
-        slope = tuple((y1_ - y0_) / (t1 - t0) for y0_, y1_, in zip(y0, y1))
-        return tuple(y0_ + slope_ * (t - t0) for y0_, slope_ in zip(y0, slope))
+        if t0.dim() == 0:
+            if t == t0:
+                return y0
+            if t == t1:
+                return y1
+            t0, t1, t = t0.to(y0[0]), t1.to(y0[0]), t.to(y0[0])
+            slope = tuple((y1_ - y0_) / (t1 - t0) for y0_, y1_, in zip(y0, y1))
+            return tuple(y0_ + slope_ * (t - t0) for y0_, slope_ in zip(y0, slope))
+        else:
+            # vectorized variant
+            if all(t == t0):
+                return y0
+            if all(t == t1):
+                return y1
+            t0, t1, t = t0.to(y0[0]), t1.to(y0[0]), t.to(y0[0])
+            slope = tuple((y1_ - y0_) / (t1 - t0) for y0_, y1_, in zip(y0, y1))
+            return tuple(y0_ + slope_ * (t - t0) for y0_, slope_ in zip(y0, slope))

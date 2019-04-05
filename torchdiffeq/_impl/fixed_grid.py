@@ -5,7 +5,18 @@ from . import rk_common
 class Euler(FixedGridODESolver):
 
     def step_func(self, func, t, dt, y, *args):
-        return tuple(dt_ * f_ for dt_, f_ in zip(dt, func(t, y, *args)))
+        if not isinstance(dt, tuple):
+            dt = dt,
+        y_dt = func(t, y, *args)
+        res = []
+        for dt_, f_ in zip(dt, y_dt):
+            # TODO fix this hack
+            if dt_.dim() > 0:
+                # broadcast dt to
+                dim_diff = f_.dim() - dt_.dim()
+                dt_ = dt_[[slice(None)] + dim_diff*[None]]
+            res.append(dt_ * f_)
+        return tuple(res)
 
     @property
     def order(self):

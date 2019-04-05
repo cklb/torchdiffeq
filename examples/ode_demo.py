@@ -80,19 +80,23 @@ def get_batch(t_values, y_values, u_values):
     set_size = 10  # time steps per dataset
     batch_size = 20  # data sets per batch
     set_idxs = np.arange(0, t_values.shape[0], set_size, dtype=np.int64)
-    all_selectors = torch.from_numpy(np.random.choice(set_idxs,
-                                                      batch_size,
-                                                      replace=False))
-    set_selectors = [all_selectors + i for i in range(set_size)]
-
-    def _extract_sets(values, selectors):
-        sets = torch.stack(tuple(values[sel] for sel in set_selectors), dim=0)  # (T, M, D)
-        return sets
+    all_selectors = np.random.choice(set_idxs,
+                                     batch_size,
+                                     replace=False)
+    set_selectors = torch.tensor([all_selectors + i for i in range(set_size)]).t()
 
     batch_y0 = y_values[all_selectors]
-    batch_t = _extract_sets(t_values, set_selectors)
-    batch_y = _extract_sets(y_values, set_selectors)
-    batch_u = _extract_sets(u_values, set_selectors)
+    batch_t = t_values[set_selectors]
+    batch_y = y_values[set_selectors]
+    batch_u = u_values[set_selectors]
+
+    # def _extract_sets(values, selectors):
+    #     sets = torch.stack(tuple(values[sel] for sel in selectors), dim=1)  # (T, M, D)
+    #     return sets
+    #
+    # batch_t = _extract_sets(t_values, set_selectors)
+    # batch_y = _extract_sets(y_values, set_selectors)
+    # batch_u = _extract_sets(u_values, set_selectors)
 
     return batch_y0, batch_t, batch_y, batch_u
 
