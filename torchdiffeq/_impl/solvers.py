@@ -96,14 +96,14 @@ class FixedGridODESolver(object):
 
         j = 1
         y0 = self.y0
-        if time_grid.dim() == 1:
-            times = zip(time_grid[:-1], time_grid[1:])
-        else:
+        if t.dim() > 1:
             times = zip(time_grid.t()[:-1], time_grid.t()[1:])
+        else:
+            times = zip(time_grid[:-1], time_grid[1:])
         for idx, (t0, t1) in enumerate(times):
             extra_args = []
             if self.u is not None:
-                if self.u[0].dim() == 3:
+                if self.u[0].dim() > 3:
                     u = tuple(_u[:, idx] for _u in self.u)
                 else:
                     u = tuple(_u[idx] for _u in self.u)
@@ -113,7 +113,7 @@ class FixedGridODESolver(object):
             y1 = tuple(y0_ + dy_ for y0_, dy_ in zip(y0, dy))
 
             def _in_solution_region(idx, t_values, curr_time):
-                if idx < len(t_values):
+                if idx >= len(t_values):
                     return False
                 if curr_time.dim() == 0:
                     return curr_time >= t_values[idx]
@@ -127,7 +127,15 @@ class FixedGridODESolver(object):
 
             y0 = y1
 
-        return tuple(map(torch.stack, tuple(zip(*solution))))
+        sol = tuple(map(torch.stack, tuple(zip(*solution))))
+
+        if t.dim() > 1:
+            sol[0].transpose_(0, 1)
+
+        return sol
+
+        # sol = torch.stack(tuple(zip(*solution)))
+        # return sol
 
     def _linear_interp(self, t0, t1, y0, y1, t):
         if t0.dim() == 0:
