@@ -1,42 +1,18 @@
+import logging
+from datetime import datetime
 import os
 import argparse
-import time
 import numpy as np
+
+# for reproducible results
+np.random.seed(20190417)
 
 import torch
 import torch.nn as nn
 import torch.optim as optim
-import torch.functional as F
 
-parser = argparse.ArgumentParser('ODE demo')
-parser.add_argument('--method', type=str, choices=['dopri5', 'adams'], default='dopri5')
-parser.add_argument('--data_size', type=int, default=1000)
-parser.add_argument('--batch_time', type=int, default=10)
-parser.add_argument('--batch_size', type=int, default=20)
-parser.add_argument('--niters', type=int, default=2000)
-parser.add_argument('--test_freq', type=int, default=20)
-parser.add_argument('--viz', action='store_true')
-parser.add_argument('--gpu', type=int, default=0)
-parser.add_argument('--adjoint', action='store_false')
-args = parser.parse_args()
 
-if args.adjoint:
-    # from torchdiffeq import odeint_adjoint as odeint
-    from torchdiffeq import odeint
-else:
-    from torchdiffeq import odeint
-
-device = torch.device('cuda:' + str(args.gpu) if torch.cuda.is_available() else 'cpu')
-
-state_dim = 3
-# state_dim = 2
-# state_dim = 1
-input_dim = 1
-net_dim = state_dim + input_dim
-
-true_y0 = torch.tensor([[1., 1., 1.]])
-# true_y0 = torch.tensor([[2., 0.]])
-# true_y0 = torch.tensor([[2.]])
+import matplotlib.pyplot as plt
 
 
 class RealModel(nn.Module):
@@ -98,6 +74,13 @@ def separate_data(data):
     return train_data, val_data, test_data
 
 
+def distort_data(data):
+    t_data, y_data, u_data = data
+    y_arr = y_data.numpy()
+    y_arr += np.random.normal(size=y_data.shape)
+    return t_data, y_data, u_data
+
+
 def get_batch(t_values, y_values, u_values):
     set_size = 10  # time steps per dataset
     batch_size = 20  # data sets per batch
@@ -128,93 +111,6 @@ def makedirs(dirname):
         os.makedirs(dirname)
 
 
-if args.viz:
-    makedirs('png')
-    import matplotlib.pyplot as plt
-    fig = plt.figure(figsize=(12, 4), facecolor='white')
-    ax_phase = fig.add_subplot(221, frameon=False)
-    ax_vecfield = fig.add_subplot(222, frameon=False)
-    ax_traj = fig.add_subplot(223, frameon=False)
-    ax_errors = fig.add_subplot(224, frameon=False)
-    plt.show(block=False)
-
-
-def visualize(data, pred_y, odefunc, itr, errors, ground_truth=None):
-    train_t, train_y, train_u = data
-    if ground_truth is not None:
-        all_t, all_y, all_u = ground_truth
-        all_pred = odeint(func, all_y[0], all_t, all_u)
-
-    ax_traj.cla()
-    ax_traj.set_title('Trajectories')
-    ax_traj.set_xlabel('t')
-    ax_traj.set_ylabel('x,y')
-    for idx in range(all_y.shape[-1]):
-        ax_traj.plot(all_t.numpy(), all_y.numpy()[..., idx], label="ground truth x")
-        ax_traj.scatter(train_t.numpy(), train_y.numpy()[..., idx], label="train samples x")
-        ax_traj.plot(all_t.numpy(), all_pred.numpy()[..., idx], "--", label="prediction x")
-
-    # ax_traj.plot(train_t.numpy(),
-    #              train_y.numpy()[:, 0, 1],
-    #              '-g',
-    #              label="real y",
-    #              )
-    # ax_traj.plot(train_t.numpy(),
-    #              pred_y.numpy()[:, 0, 0],
-    #              '--',
-    #              label="pred x")
-    # ax_traj.plot(train_t.numpy(),
-    #              pred_y.numpy()[:, 0, 1],
-    #              'b--',
-    #              label="pred y")
-    ax_traj.set_xlim(all_t.min(), all_t.max())
-    # ax_traj.set_ylim(all_y.min(), all_y.min())
-    ax_traj.legend()
-
-    if 0:
-        ax_phase.cla()
-        ax_phase.set_title('Phase Portrait')
-        ax_phase.set_xlabel('x')
-        ax_phase.set_ylabel('y')
-        ax_phase.plot(all_y.numpy()[..., 0], all_y.numpy()[..., 1], label="ground truth")
-        ax_phase.scatter(train_y.numpy()[:, 0, 0], train_y.numpy()[:, 0, 1], label="train samples")
-        ax_phase.plot(all_pred.numpy()[..., 0], all_pred.numpy()[..., 1], label="prediction")
-        ax_phase.set_xlim(-2, 2)
-        ax_phase.set_ylim(-2, 2)
-        ax_phase.legend()
-
-        ax_vecfield.cla()
-        ax_vecfield.set_title('Learned Vector Field')
-        ax_vecfield.set_xlabel('x')
-        ax_vecfield.set_ylabel('y')
-
-        y, x = np.mgrid[-2:2:21j, -2:2:21j]
-        vec_init_times = torch.ones(21**2, 1) * train_t[0]
-        vec_init_states = torch.Tensor(np.stack([x, y], -1).reshape(21 * 21, 1, 2))
-        vec_inputs = train_u[21**2*[0]]
-        dydt = odefunc(vec_init_times, vec_init_states, vec_inputs).cpu().detach().numpy()
-        dydt = dydt.reshape(21, 21, 2)
-        mag = np.sqrt(dydt[..., 0]**2 + dydt[..., 1]**2)
-        dydt = (dydt.T / mag).T
-
-        ax_vecfield.streamplot(x, y, dydt[..., 0], dydt[..., 1], color="black")
-        ax_vecfield.set_xlim(-2, 2)
-        ax_vecfield.set_ylim(-2, 2)
-
-    ax_errors.cla()
-    ax_errors.set_title('Errors')
-    ax_errors.set_xlabel('Iteration')
-    ax_errors.set_ylabel('RSME / N')
-    for lbl, err in errors.items():
-        ax_errors.plot(err, label=lbl)
-    ax_errors.legend()
-
-    fig.tight_layout()
-    # plt.savefig('png/{:03d}'.format(itr))
-    plt.draw()
-    plt.pause(0.001)
-
-
 class ODEFunc(nn.Module):
 
     deep = True
@@ -227,6 +123,10 @@ class ODEFunc(nn.Module):
             self.net = nn.Sequential(
                 # nn.Linear(state_dim+input_dim, state_dim),
                 nn.Linear(net_dim, 50),
+                nn.ReLU(),
+                nn.Linear(50, 100),
+                nn.ReLU(),
+                nn.Linear(100, 50),
                 nn.ReLU(),
                 nn.Linear(50, state_dim),
             )
@@ -296,58 +196,252 @@ def calc_error(data, func):
     return err.item()/len(y_pred), y_pred
 
 
-if __name__ == '__main__':
+def train_model(train_data, val_data, model, optimizer, eval_cb=None):
+    def _train_closure():
+        optimizer.zero_grad()
+        batch_y0, batch_t, batch_y, batch_u = get_batch(*train_data)
+        pred_y = odeint(model, batch_y0, batch_t, batch_u)
+        loss = loss_func(batch_y, pred_y, model, reg=True)
+        loss.backward()
 
+    errors = {lbl: [] for lbl in ["train", "validation", "test"]}
+
+    try:
+        itr = 0
+        while True:
+        # for itr in range(1, args.niters + 1):
+            # run training step
+            optimizer.step(_train_closure)
+
+            if itr % args.test_freq == 0:
+                # calc errors
+                train_err, train_pred = calc_error(train_data, model)
+                val_err, val_pred = calc_error(val_data, model)
+                errors["train"].append(train_err)
+                errors["validation"].append(val_err)
+
+                logging.info("Train Error: {}".format(train_err))
+                logging.info("Val Error: {}".format(val_err))
+
+                if eval_cb is not None:
+                    eval_cb(itr, errors)
+            itr += 1
+
+    except BaseException as e:
+        logging.exception(e)
+        logging.error("An exception occurred, training aborted.")
+
+    finally:
+        create_checkpoint(model, itr)
+
+    return errors
+
+
+class Visualiser:
+
+    def __init__(self):
+        self.fig = plt.figure(figsize=(12, 4), facecolor='white')
+        self.ax_phase = self.fig.add_subplot(221, frameon=False)
+        self.ax_vecfield = self.fig.add_subplot(222, frameon=False)
+        self.ax_traj = self.fig.add_subplot(223, frameon=False)
+        self.ax_errors = self.fig.add_subplot(224, frameon=False)
+        plt.show(block=False)
+        # makedirs('png')
+
+    def visualize(self, data, model, itr, errors):
+        train_t, train_y, train_u = data
+        all_t, all_y, all_u = data
+        with torch.no_grad():
+            all_pred = odeint(model, all_y[0], all_t, all_u)
+
+        self.ax_traj.cla()
+        self.ax_traj.set_title('Trajectories')
+        self.ax_traj.set_xlabel('t')
+        self.ax_traj.set_ylabel('x,y')
+        for idx in range(all_y.shape[-1]):
+            var = "x{}".format(idx)
+            self.ax_traj.plot(all_t.numpy(),
+                         all_y.numpy()[..., idx],
+                         "--",
+                         label="ground truth {}".format(var))
+            # plt.gca().set_prop_cycle(None)
+            self.ax_traj.scatter(train_t.numpy(),
+                            train_y.numpy()[..., idx],
+                            label="train samples {}".format(var))
+            # plt.gca().set_prop_cycle(None)
+            self.ax_traj.plot(all_t.numpy(),
+                         all_pred.numpy()[..., idx],
+                         label="prediction {}".format(var))
+
+        # self.ax_traj.plot(train_t.numpy(),
+        #              train_y.numpy()[:, 0, 1],
+        #              '-g',
+        #              label="real y",
+        #              )
+        # self.ax_traj.plot(train_t.numpy(),
+        #              pred_y.numpy()[:, 0, 0],
+        #              '--',
+        #              label="pred x")
+        # ax_traj.plot(train_t.numpy(),
+        #              pred_y.numpy()[:, 0, 1],
+        #              'b--',
+        #              label="pred y")
+        self.ax_traj.set_xlim(all_t.min(), all_t.max())
+        # self.ax_traj.set_ylim(all_y.min(), all_y.min())
+        self.ax_traj.legend()
+
+        if 0:
+            self.ax_phase.cla()
+            self.ax_phase.set_title('Phase Portrait')
+            self.ax_phase.set_xlabel('x')
+            self.ax_phase.set_ylabel('y')
+            self.ax_phase.plot(all_y.numpy()[..., 0], all_y.numpy()[..., 1], label="ground truth")
+            self.ax_phase.scatter(train_y.numpy()[:, 0, 0], train_y.numpy()[:, 0, 1], label="train samples")
+            self.ax_phase.plot(all_pred.numpy()[..., 0], all_pred.numpy()[..., 1], label="prediction")
+            self.ax_phase.set_xlim(-2, 2)
+            self.ax_phase.set_ylim(-2, 2)
+            self.ax_phase.legend()
+
+            self.ax_vecfield.cla()
+            self.ax_vecfield.set_title('Learned Vector Field')
+            self.ax_vecfield.set_xlabel('x')
+            self.ax_vecfield.set_ylabel('y')
+
+            y, x = np.mgrid[-2:2:21j, -2:2:21j]
+            vec_init_times = torch.ones(21**2, 1) * train_t[0]
+            vec_init_states = torch.Tensor(np.stack([x, y], -1).reshape(21 * 21, 1, 2))
+            vec_inputs = train_u[21**2*[0]]
+            dydt = odefunc(vec_init_times, vec_init_states, vec_inputs).cpu().detach().numpy()
+            dydt = dydt.reshape(21, 21, 2)
+            mag = np.sqrt(dydt[..., 0]**2 + dydt[..., 1]**2)
+            dydt = (dydt.T / mag).T
+
+            self.ax_vecfield.streamplot(x, y, dydt[..., 0], dydt[..., 1], color="black")
+            self.ax_vecfield.set_xlim(-2, 2)
+            self.ax_vecfield.set_ylim(-2, 2)
+
+        self.ax_errors.cla()
+        self.ax_errors.set_title('Errors')
+        self.ax_errors.set_xlabel('Iteration')
+        self.ax_errors.set_ylabel('RSME / N')
+        for lbl, err in errors.items():
+            self.ax_errors.plot(err, label=lbl)
+        self.ax_errors.legend()
+
+        self.fig.tight_layout()
+        # plt.savefig('png/{:03d}'.format(itr))
+        plt.draw()
+        plt.pause(0.001)
+
+
+def main():
     # handle data
     data = create_data()
     train_data, val_data, test_data = separate_data(data)
 
-    func = ODEFunc()
-    # optimizer = optim.RMSprop(func.parameters(), lr=1e-2)
-    optimizer = optim.SGD(func.parameters(), lr=1e-1)
-    end = time.time()
+    # add noise
+    train_data = distort_data(train_data)
 
-    # time_meter = RunningAverageMeter(0.97)
-    # loss_meter = RunningAverageMeter(0.97)
+    # model and optimizer
+    model = ODEFunc()
 
-    errors = {lbl: [] for lbl in ["train", "validation", "test"]}
+    # load checkpoint
+    load_checkpoint(model)
 
-    ii = 0
-    for itr in range(1, args.niters + 1):
-        def _closure():
-            optimizer.zero_grad()
-            batch_y0, batch_t, batch_y, batch_u = get_batch(*train_data)
-            pred_y = odeint(func, batch_y0, batch_t, batch_u)
-            loss = loss_func(batch_y, pred_y, func, reg=True)
-            loss.backward()
-        optimizer.step(_closure)
+    optimizer = optim.RMSprop(model.parameters(), lr=1e-3)
+    # optimizer = optim.SGD(func.parameters(), lr=1e-1)
 
-        # time_meter.update(time.time() - end)
-        # loss_meter.update(loss.item())
+    if args.viz:
+        vis = Visualiser()
 
-        if itr % args.test_freq == 0:
-            with torch.no_grad():
-                # calc errors
-                train_err, train_pred = calc_error(train_data, func)
-                val_err, val_pred = calc_error(val_data, func)
-                test_err, test_pred = calc_error(test_data, func)
-                errors["train"].append(train_err)
-                errors["validation"].append(val_err)
-                errors["test"].append(test_err)
+        def _eval_callback(itr_idx, errors):
+            vis.visualize(data,
+                          model,
+                          itr_idx,
+                          errors
+                          )
+    else:
+        _eval_callback = None
 
-                if args.viz:
-                    visualize(train_data, train_pred, func, ii, errors,
-                              ground_truth=data)
-                ii += 1
+    # run training
+    errors = train_model(train_data, val_data, model, optimizer, _eval_callback)
 
-        end = time.time()
+    test_err, test_pred = calc_error(test_data, model)
+    errors["test"].append(test_err)
 
-    test_err = calc_error(test_data, func)
+    if 0:
+        print("Real Values:")
+        print("A:", RealModel.true_A)
+        print("B:", RealModel.true_B)
+        print("Learned Values:")
+        for name, param in model.named_parameters():
+            print(name, param)
 
-    print("Real Values:")
-    print("A:", RealModel.true_A)
-    print("B:", RealModel.true_B)
 
-    print("Learned Values:")
-    for name, param in func.named_parameters():
-        print(name, param)
+def load_checkpoint(model, name=None):
+    path = args.checkpoint_path
+    try:
+        files = os.listdir(path)
+    except FileNotFoundError:
+        os.makedirs(path)
+        return
+
+    if name is None:
+        chkpt_files = [f for f in files if "checkpoint" in f]
+        if not chkpt_files:
+            return
+        dates = [datetime.strptime(f.split("_")[0], chekpoint_mark)
+                 for f in chkpt_files]
+        sorted_chkpts = sorted(zip(dates, chkpt_files), key=lambda x: x[0])
+        chkpt_file = sorted_chkpts[-1][1]
+    else:
+        chkpt_file = name
+
+    file = os.sep.join([path, chkpt_file])
+    model.load_state_dict(torch.load(file))
+    logging.info("Loaded checkpoint from file")
+
+
+def create_checkpoint(model, itr):
+    path = args.checkpoint_path
+    date = datetime.now().strftime(chekpoint_mark)
+    fname = date + "_checkpoint.torch"
+    file = os.path.sep.join([path, fname])
+    torch.save(model.state_dict(), file)
+
+
+if __name__ == '__main__':
+    chekpoint_mark = "%Y-%m-%d %H:%M:%S"
+    parser = argparse.ArgumentParser('ODE demo')
+    parser.add_argument('--method', type=str, choices=['dopri5', 'adams'],
+                        default='dopri5')
+    parser.add_argument('--data_size', type=int, default=1000)
+    parser.add_argument('--batch_time', type=int, default=10)
+    parser.add_argument('--batch_size', type=int, default=20)
+    parser.add_argument('--niters', type=int, default=10000)
+    parser.add_argument('--test_freq', type=int, default=10)
+    parser.add_argument('--viz', action='store_true')
+    parser.add_argument('--gpu', type=int, default=0)
+    parser.add_argument('--adjoint', action='store_false')
+    parser.add_argument('--checkpoint_path', type=str, default=".checkpoints")
+    args = parser.parse_args()
+
+    if args.adjoint:
+        # from torchdiffeq import odeint_adjoint as odeint
+        from torchdiffeq import odeint
+    else:
+        from torchdiffeq import odeint
+
+    device = torch.device('cuda:' + str(args.gpu) if torch.cuda.is_available() else 'cpu')
+
+    state_dim = 3
+    # state_dim = 2
+    # state_dim = 1
+    input_dim = 1
+    net_dim = state_dim + input_dim
+
+    true_y0 = torch.tensor([[1., 1., 1.]])
+    # true_y0 = torch.tensor([[2., 0.]])
+    # true_y0 = torch.tensor([[2.]])
+
+    main()
