@@ -116,20 +116,25 @@ class ODEFunc(nn.Module):
     deep = True
     # deep = False
 
-    def __init__(self):
+    def __init__(self, layers):
         super(ODEFunc, self).__init__()
+        self.all_layers = [net_input_dim] + layers + [net_outpout_dim]
 
         if self.deep:
-            self.net = nn.Sequential(
-                # nn.Linear(state_dim+input_dim, state_dim),
-                nn.Linear(net_dim, 50),
-                nn.ReLU(),
-                nn.Linear(50, 100),
-                nn.ReLU(),
-                nn.Linear(100, 50),
-                nn.ReLU(),
-                nn.Linear(50, state_dim),
-            )
+            # build structure
+            stages = []
+            for d1, d2 in zip(self.all_layers[:-1], self.all_layers[1:]):
+                layer = nn.Linear(d1, d2)
+                stages.append(layer)
+                if args.activation == "relu":
+                    act = nn.ReLU()
+                else:
+                    raise NotImplementedError(args.activation)
+                stages.append(act)
+
+            self.net = nn.Sequential(*stages)
+
+            # init weights
             for m in self.net.modules():
                 if isinstance(m, nn.Linear):
                     nn.init.normal_(m.weight, mean=0, std=0.1)
@@ -196,7 +201,7 @@ def calc_error(data, func):
     return err.item()/len(y_pred), y_pred
 
 
-def train_model(train_data, val_data, model, optimizer, eval_cb=None):
+def train_model(train_data, val_data, model, optimizer, checkpoint=None, eval_cb=None):
     def _train_closure():
         optimizer.zero_grad()
         batch_y0, batch_t, batch_y, batch_u = get_batch(*train_data)
@@ -204,12 +209,19 @@ def train_model(train_data, val_data, model, optimizer, eval_cb=None):
         loss = loss_func(batch_y, pred_y, model, reg=True)
         loss.backward()
 
-    errors = {lbl: [] for lbl in ["train", "validation", "test"]}
-
+    # try to load checkpoint
+    state = load_checkpoint(checkpoint, model.all_layers)
+    if state:
+        model.load_state_dict(state["model"])
+        optimizer.load_state_dict(state["optimizer"])
+        errors = state["errors"]
+        start_epoch = state["epoch"]
+    else:
+        logging.info("Training new model")
+        errors = {lbl: [] for lbl in ["train", "validation", "test"]}
+        start_epoch = 0
     try:
-        itr = 0
-        while True:
-        # for itr in range(1, args.niters + 1):
+        for itr in range(start_epoch, args.niters):
             # run training step
             optimizer.step(_train_closure)
 
@@ -225,14 +237,19 @@ def train_model(train_data, val_data, model, optimizer, eval_cb=None):
 
                 if eval_cb is not None:
                     eval_cb(itr, errors)
-            itr += 1
+        logging.info("Finished training over {} epochs".format(itr))
 
     except BaseException as e:
-        logging.exception(e)
         logging.error("An exception occurred, training aborted.")
+        logging.exception(e)
 
     finally:
-        create_checkpoint(model, itr)
+        state = {"epoch": itr,
+                 "errors": errors,
+                 "model": model.state_dict(),
+                 "optimizer": optimizer.state_dict()
+                 }
+        create_checkpoint(state, model.all_layers)
 
     return errors
 
@@ -248,30 +265,37 @@ class Visualiser:
         plt.show(block=False)
         # makedirs('png')
 
-    def visualize(self, data, model, itr, errors):
-        train_t, train_y, train_u = data
-        all_t, all_y, all_u = data
+    def visualize(self, raw_data, train_data, val_data, test_data, model, itr, errors):
+        all_t, all_y, all_u = raw_data
+        train_t, train_y, train_u = train_data
+        val_t, val_y, val_u = train_data
+
         with torch.no_grad():
-            all_pred = odeint(model, all_y[0], all_t, all_u)
+            all_err, all_pred = calc_error(raw_data, model)
+        errors["test"].append(all_err)
 
         self.ax_traj.cla()
-        self.ax_traj.set_title('Trajectories')
+        self.ax_traj.set_title('Trajectories for Epoch {}'.format(itr))
         self.ax_traj.set_xlabel('t')
         self.ax_traj.set_ylabel('x,y')
         for idx in range(all_y.shape[-1]):
             var = "x{}".format(idx)
             self.ax_traj.plot(all_t.numpy(),
-                         all_y.numpy()[..., idx],
-                         "--",
-                         label="ground truth {}".format(var))
+                              all_y.numpy()[..., idx],
+                              "--",
+                              label="ground truth {}".format(var))
             # plt.gca().set_prop_cycle(None)
             self.ax_traj.scatter(train_t.numpy(),
-                            train_y.numpy()[..., idx],
-                            label="train samples {}".format(var))
+                                 train_y.numpy()[..., idx],
+                                 label="train samples {}".format(var))
+            self.ax_traj.scatter(val_t.numpy(),
+                                 val_y.numpy()[..., idx],
+                                 marker="+",
+                                 label="validation samples {}".format(var))
             # plt.gca().set_prop_cycle(None)
             self.ax_traj.plot(all_t.numpy(),
-                         all_pred.numpy()[..., idx],
-                         label="prediction {}".format(var))
+                              all_pred.numpy()[..., idx],
+                              label="prediction {}".format(var))
 
         # self.ax_traj.plot(train_t.numpy(),
         #              train_y.numpy()[:, 0, 1],
@@ -336,26 +360,23 @@ class Visualiser:
 
 def main():
     # handle data
-    data = create_data()
-    train_data, val_data, test_data = separate_data(data)
+    raw_data = create_data()
+    train_data, val_data, test_data = separate_data(raw_data)
 
     # add noise
     train_data = distort_data(train_data)
 
-    # model and optimizer
-    model = ODEFunc()
-
-    # load checkpoint
-    load_checkpoint(model)
-
+    # build model and optimizer
+    model = ODEFunc(args.structure)
     optimizer = optim.RMSprop(model.parameters(), lr=1e-3)
+
     # optimizer = optim.SGD(func.parameters(), lr=1e-1)
 
     if args.viz:
         vis = Visualiser()
 
         def _eval_callback(itr_idx, errors):
-            vis.visualize(data,
+            vis.visualize(raw_data, train_data, val_data, test_data,
                           model,
                           itr_idx,
                           errors
@@ -364,10 +385,9 @@ def main():
         _eval_callback = None
 
     # run training
-    errors = train_model(train_data, val_data, model, optimizer, _eval_callback)
-
-    test_err, test_pred = calc_error(test_data, model)
-    errors["test"].append(test_err)
+    errors = train_model(train_data, val_data, model, optimizer,
+                         checkpoint="latest",
+                         eval_cb=_eval_callback)
 
     if 0:
         print("Real Values:")
@@ -378,7 +398,10 @@ def main():
             print(name, param)
 
 
-def load_checkpoint(model, name=None):
+def load_checkpoint(name, structure):
+    if name is None:
+        return {}
+
     path = args.checkpoint_path
     try:
         files = os.listdir(path)
@@ -386,11 +409,20 @@ def load_checkpoint(model, name=None):
         os.makedirs(path)
         return
 
-    if name is None:
-        chkpt_files = [f for f in files if "checkpoint" in f]
+    if name is "latest":
+        chkpt_files = []
+        for f in files:
+            if "checkpoint" not in f:
+                continue
+            if str(structure) not in f:
+                continue
+            chkpt_files.append(f)
         if not chkpt_files:
-            return
-        dates = [datetime.strptime(f.split("_")[0], chekpoint_mark)
+            logging.warning("No appropriate checkpoint found")
+            return {}
+
+        # get most up to date checkpoint
+        dates = [datetime.strptime(f.split("_")[0], checkpoint_mark)
                  for f in chkpt_files]
         sorted_chkpts = sorted(zip(dates, chkpt_files), key=lambda x: x[0])
         chkpt_file = sorted_chkpts[-1][1]
@@ -398,20 +430,22 @@ def load_checkpoint(model, name=None):
         chkpt_file = name
 
     file = os.sep.join([path, chkpt_file])
-    model.load_state_dict(torch.load(file))
-    logging.info("Loaded checkpoint from file")
+    state = torch.load(file)
+    logging.info("Loaded checkpoint file '{}'".format(file))
+    return state
 
 
-def create_checkpoint(model, itr):
+def create_checkpoint(state, structure):
     path = args.checkpoint_path
-    date = datetime.now().strftime(chekpoint_mark)
-    fname = date + "_checkpoint.torch"
+    date = datetime.now().strftime(checkpoint_mark)
+    fname = "{}_{}_checkpoint.torch".format(date, structure)
     file = os.path.sep.join([path, fname])
-    torch.save(model.state_dict(), file)
+    torch.save(state, file)
+    logging.info("Checkpoint '{}' created".format(file))
 
 
 if __name__ == '__main__':
-    chekpoint_mark = "%Y-%m-%d %H:%M:%S"
+    checkpoint_mark = "%Y-%m-%d %H:%M:%S"
     parser = argparse.ArgumentParser('ODE demo')
     parser.add_argument('--method', type=str, choices=['dopri5', 'adams'],
                         default='dopri5')
@@ -424,6 +458,8 @@ if __name__ == '__main__':
     parser.add_argument('--gpu', type=int, default=0)
     parser.add_argument('--adjoint', action='store_false')
     parser.add_argument('--checkpoint_path', type=str, default=".checkpoints")
+    parser.add_argument('--activation', type=str, default="relu")
+    parser.add_argument('--structure', type=list, default=[10, 10])
     args = parser.parse_args()
 
     if args.adjoint:
@@ -438,10 +474,17 @@ if __name__ == '__main__':
     # state_dim = 2
     # state_dim = 1
     input_dim = 1
-    net_dim = state_dim + input_dim
+    net_input_dim = state_dim + input_dim
+    net_outpout_dim = state_dim
 
     true_y0 = torch.tensor([[1., 1., 1.]])
     # true_y0 = torch.tensor([[2., 0.]])
     # true_y0 = torch.tensor([[2.]])
+
+    # init logging
+    logging.basicConfig(filename="training_{}.log".format(args.structure),
+                        format='%(asctime)s %(message)s',
+                        datefmt=checkpoint_mark,
+                        level=logging.INFO)
 
     main()
