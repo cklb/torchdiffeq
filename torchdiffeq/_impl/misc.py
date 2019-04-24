@@ -53,7 +53,10 @@ def _is_finite(tensor):
 
 
 def _decreasing(t):
-    return (t[1:] < t[:-1]).all()
+    if t.dim() == 1:
+        return (t[1:] < t[:-1]).all()
+    else:
+        return (t[:, 1:] < t[:, :-1]).all()
 
 
 def _assert_increasing(t):
