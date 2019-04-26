@@ -17,7 +17,7 @@ SOLVERS = {
 }
 
 
-def odeint(func, y0, t, u=None, rtol=1e-7, atol=1e-9, method=None, options=None):
+def odeint(func, y0, t, rtol=1e-7, atol=1e-9, method=None, options=None):
     """Integrate a system of ordinary differential equations.
 
     Solves the initial value problem for a non-stiff system of first order ODEs:
@@ -58,7 +58,7 @@ def odeint(func, y0, t, u=None, rtol=1e-7, atol=1e-9, method=None, options=None)
             an invalid dtype.
     """
 
-    tensor_input, func, y0, t, u = _check_inputs(func, y0, t, u)
+    tensor_input, func, y0, t = _check_inputs(func, y0, t)
 
     if options is None:
         options = {}
@@ -66,10 +66,9 @@ def odeint(func, y0, t, u=None, rtol=1e-7, atol=1e-9, method=None, options=None)
         raise ValueError('cannot supply `options` without specifying `method`')
 
     if method is None:
-        method = 'euler'
-        # method = 'dopri5'
+        method = 'dopri5'
 
-    solver = SOLVERS[method](func, y0, u, rtol=rtol, atol=atol, **options)
+    solver = SOLVERS[method](func, y0, rtol=rtol, atol=atol, **options)
     solution = solver.integrate(t)
 
     if tensor_input:

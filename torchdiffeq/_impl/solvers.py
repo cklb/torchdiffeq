@@ -36,7 +36,7 @@ class AdaptiveStepsizeODESolver(object):
 class FixedGridODESolver(object):
     __metaclass__ = abc.ABCMeta
 
-    def __init__(self, func, y0, u=None, step_size=None, grid_constructor=None, **unused_kwargs):
+    def __init__(self, func, y0, step_size=None, grid_constructor=None, **unused_kwargs):
         unused_kwargs.pop('rtol', None)
         unused_kwargs.pop('atol', None)
         _handle_unused_kwargs(self, unused_kwargs)
@@ -44,7 +44,6 @@ class FixedGridODESolver(object):
 
         self.func = func
         self.y0 = y0
-        self.u = u
 
         if step_size is not None and grid_constructor is None:
             self.grid_constructor = self._grid_constructor_from_step_size(step_size)
@@ -74,7 +73,7 @@ class FixedGridODESolver(object):
         pass
 
     @abc.abstractmethod
-    def step_func(self, func, t, dt, y, *args):
+    def step_func(self, func, t, dt, y):
         pass
 
     def integrate(self, t):
@@ -101,15 +100,7 @@ class FixedGridODESolver(object):
         else:
             times = zip(time_grid[:-1], time_grid[1:])
         for idx, (t0, t1) in enumerate(times):
-            extra_args = []
-            if self.u is not None:
-                if self.u[0].dim() > 3:
-                    u = tuple(_u[:, idx] for _u in self.u)
-                else:
-                    u = tuple(_u[idx] for _u in self.u)
-                extra_args.append(u)
-
-            dy = self.step_func(self.func, t0, t1 - t0, y0, *extra_args)
+            dy = self.step_func(self.func, t0, t1 - t0, y0)
             y1 = tuple(y0_ + dy_ for y0_, dy_ in zip(y0, dy))
 
             def _in_solution_region(idx, t_values, curr_time):
@@ -133,9 +124,6 @@ class FixedGridODESolver(object):
             sol[0].transpose_(0, 1)
 
         return sol
-
-        # sol = torch.stack(tuple(zip(*solution)))
-        # return sol
 
     def _linear_interp(self, t0, t1, y0, y1, t):
         if t0.dim() == 0:

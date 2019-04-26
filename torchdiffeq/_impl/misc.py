@@ -176,24 +176,15 @@ def _optimal_step_size(last_step, mean_error_ratio, safety=0.9, ifactor=10.0, df
     return last_step / factor
 
 
-def _check_inputs(func, y0, t, u=None):
+def _check_inputs(func, y0, t):
     tensor_input = False
     if torch.is_tensor(y0):
         _base_nontuple_func_ = func
         tensor_input = True
         y0 = (y0,)
 
-        if u is not None:
-            if torch.is_tensor(u):
-                u = (u,)
-                def _tuple_func(_t, _y, _u):
-                    return _base_nontuple_func_(_t, _y[0], _u[0]),
-            else:
-                def _tuple_func(_t, _y, _u):
-                    return _base_nontuple_func_(_t, _y[0], _u),
-        else:
-            def _tuple_func(_t, _y):
-                return _base_nontuple_func_(_t, _y[0]),
+        def _tuple_func(_t, _y):
+            return _base_nontuple_func_(_t, _y[0]),
         func = _tuple_func
 
     assert isinstance(y0, tuple), 'y0 must be either a torch.Tensor or a tuple'
@@ -205,22 +196,12 @@ def _check_inputs(func, y0, t, u=None):
     if _decreasing(t):
         t = -t
         _base_reverse_func = func
-        if u is not None:
-            def _reversed_func(_t, _y, _u):
-                return tuple(-f_ for f_ in _base_reverse_func(-_t, _y, _u))
-        else:
-            def _reversed_func(_t, _y):
-                return tuple(-f_ for f_ in _base_reverse_func(-_t, _y))
+
+        def _reversed_func(_t, _y):
+            return tuple(-f_ for f_ in _base_reverse_func(-_t, _y))
         func = _reversed_func
 
     if not torch.is_floating_point(t):
         raise TypeError('`t` must be a floating point Tensor but is a {}'.format(t.type()))
 
-    if u is not None:
-        assert isinstance(u, tuple), 'u must be either a torch.Tensor or a tuple'
-        for _u in u:
-            if not torch.is_floating_point(_u):
-                raise TypeError('`u` must be a floating point Tensor but is a {}'.format(_u.type()))
-            assert t.shape[0] == _u.shape[0], 'input values `u` must have the same first dimension as t'
-
-    return tensor_input, func, y0, t, u
+    return tensor_input, func, y0, t

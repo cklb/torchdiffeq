@@ -9,13 +9,13 @@ class OdeintAdjointMethod(torch.autograd.Function):
     @staticmethod
     def forward(ctx, *args):
         assert len(args) >= 8, 'Internal error: all arguments required.'
-        y0, func, t, u, flat_params, rtol, atol, method, options = args
-            # args[:-7], args[-7], args[-6], args[-5], args[-4], args[-3], args[-2], args[-1]
+        y0, func, t, flat_params, rtol, atol, method, options = \
+            args[:-7], args[-7], args[-6], args[-5], args[-4], args[-3], args[-2], args[-1]
 
         ctx.func, ctx.rtol, ctx.atol, ctx.method, ctx.options = func, rtol, atol, method, options
 
         with torch.no_grad():
-            ans = odeint(func, y0, t, u, rtol=rtol, atol=atol, method=method, options=options)
+            ans = odeint(func, y0, t, rtol=rtol, atol=atol, method=method, options=options)
         ctx.save_for_backward(t, flat_params, *ans)
         return ans
 
@@ -102,7 +102,7 @@ class OdeintAdjointMethod(torch.autograd.Function):
             return (*adj_y, None, time_vjps, adj_params, None, None, None, None, None)
 
 
-def odeint_adjoint(func, y0, t, u=None, rtol=1e-6, atol=1e-12, method=None, options=None):
+def odeint_adjoint(func, y0, t, rtol=1e-6, atol=1e-12, method=None, options=None):
 
     # We need this in order to access the variables inside this module,
     # since we have no other way of getting variables along the execution path.
@@ -118,15 +118,15 @@ def odeint_adjoint(func, y0, t, u=None, rtol=1e-6, atol=1e-12, method=None, opti
                 super(TupleFunc, self).__init__()
                 self.base_func = base_func
 
-            def forward(self, t, y, u):
-                return (self.base_func(t, y[0]), u)
+            def forward(self, t, y):
+                return (self.base_func(t, y[0]), )
 
         tensor_input = True
         y0 = (y0,)
         func = TupleFunc(func)
 
     flat_params = _flatten(func.parameters())
-    ys = OdeintAdjointMethod.apply(*y0, func, t, u, flat_params, rtol, atol, method, options)
+    ys = OdeintAdjointMethod.apply(*y0, func, t, flat_params, rtol, atol, method, options)
 
     if tensor_input:
         ys = ys[0]

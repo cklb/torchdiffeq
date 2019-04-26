@@ -4,10 +4,10 @@ from . import rk_common
 
 class Euler(FixedGridODESolver):
 
-    def step_func(self, func, t, dt, y, *args):
+    def step_func(self, func, t, dt, y):
         if not isinstance(dt, tuple):
             dt = dt,
-        y_dt = func(t, y, *args)
+        y_dt = func(t, y)
         res = []
         for dt_, f_ in zip(dt, y_dt):
             # TODO fix this hack
@@ -25,9 +25,9 @@ class Euler(FixedGridODESolver):
 
 class Midpoint(FixedGridODESolver):
 
-    def step_func(self, func, t, dt, y, *args):
-        y_mid = tuple(y_ + f_ * dt / 2 for y_, f_ in zip(y, func(t, y, *args)))
-        return tuple(dt * f_ for f_ in func(t + dt / 2, y_mid, *args))
+    def step_func(self, func, t, dt, y):
+        y_mid = tuple(y_ + f_ * dt / 2 for y_, f_ in zip(y, func(t, y)))
+        return tuple(dt * f_ for f_ in func(t + dt / 2, y_mid))
 
     @property
     def order(self):
@@ -36,8 +36,8 @@ class Midpoint(FixedGridODESolver):
 
 class RK4(FixedGridODESolver):
 
-    def step_func(self, func, t, dt, y, *args):
-        return rk_common.rk4_alt_step_func(func, t, dt, y, *args)
+    def step_func(self, func, t, dt, y):
+        return rk_common.rk4_alt_step_func(func, t, dt, y)
 
     @property
     def order(self):
